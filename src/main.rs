@@ -1,10 +1,15 @@
 use cargo::{
-    core::{resolver::Method, InternedString, PackageIdSpec, Workspace},
+    core::{
+        compiler::{CompileKind, RustcTargetData},
+        resolver::{CliFeatures, ForceAllTargets, HasDevUnits},
+        FeatureValue, PackageIdSpec, Workspace,
+    },
     ops,
     util::{
         command_prelude::{App, Arg},
         config::Config,
         errors::CargoResult,
+        interning::InternedString,
     },
 };
 use std::{collections::BTreeSet, path::Path, rc::Rc};
@@ -46,8 +51,12 @@ fn main() -> CargoResult<()> {
     let features = Rc::new(
         matches
             .values_of("features")
-            .map(|v| v.map(InternedString::new).collect::<BTreeSet<_>>())
-            .unwrap_or(BTreeSet::new()),
+            .map(|v| {
+                v.map(InternedString::new)
+                    .map(FeatureValue::new)
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default(),
     );
 
     let config = Config::default()?;
@@ -56,13 +65,21 @@ fn main() -> CargoResult<()> {
         ws.current().unwrap().package_id(),
     )];
 
-    let method = Method::Required {
-        dev_deps: false,
-        features,
-        all_features,
-        uses_default_features,
-    };
-    let (_package_set, resolve) = ops::resolve_ws_with_method(&ws, method, &specs)?;
+    let targets = &[CompileKind::Host][..];
+    let resolve = ops::resolve_ws_with_opts(
+        &ws,
+        &RustcTargetData::new(&ws, targets)?,
+        targets,
+        &CliFeatures {
+            features,
+            all_features,
+            uses_default_features,
+        },
+        &specs,
+        HasDevUnits::No,
+        ForceAllTargets::No,
+    )?
+    .targeted_resolve;
 
     let package_ids = resolve.sort();
     /*
@@ -77,12 +94,7 @@ fn main() -> CargoResult<()> {
     */
 
     for id in &package_ids {
-        println!(
-            "{} {} {:?}",
-            id.name(),
-            id.version(),
-            resolve.features(id.clone())
-        );
+        println!("{} {} {:?}", id.name(), id.version(), resolve.features(*id));
     }
 
     Ok(())
